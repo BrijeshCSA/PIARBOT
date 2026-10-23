@@ -1,13 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-VK-бот для пиара.
-Длинный polling, callback-кнопки, оплата через баланс, роли, рассылка.
-
-Переменные окружения (BotHost → Environment):
-    VK_TOKEN        — токен группы (Управление → Работа с API → Ключи доступа)
-    VK_GROUP_ID     — ID группы (без минуса или с ним)
-    OWNER_ID        — ваш user_id в VK
-    COMMUNITY_LINK  — ссылка на сообщество (для бонуса 100₽)
+VK PIAR BOT.
+GROUP_ID и OWNER_ID прописаны жёстко (можно переопределить через env).
+/подписка проверяет подписку на СООБЩЕСТВО БОТА (GROUP_ID).
 """
 import os
 import sys
@@ -26,9 +21,6 @@ from vk_api.exceptions import ApiError
 
 import db
 
-# ============================================================
-# ЛОГИРОВАНИЕ
-# ============================================================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -37,30 +29,18 @@ log = logging.getLogger("piar-vk")
 
 
 # ============================================================
-# КОНФИГ + ВАЛИДАЦИЯ
+# 🔴 ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ (жёстко)
+# ============================================================
+DEFAULT_GROUP_ID = "242540253"
+DEFAULT_OWNER_ID = "1062211087"
+DEFAULT_COMMUNITY_LINK = "https://vk.com/club242540253"
+
+
+# ============================================================
+# КОНФИГ
 # ============================================================
 class ConfigError(Exception):
     pass
-
-
-def _env(name: str, required: bool = True, default: str = "") -> str:
-    val = os.getenv(name, "").strip()
-    if required and not val:
-        raise ConfigError(
-            f"❌ Не задана переменная окружения {name}\n"
-            f"   Добавьте её в панели BotHost → Environment / Secrets"
-        )
-    return val or default
-
-
-def _parse_int(name: str, value: str, positive: bool = True) -> int:
-    try:
-        n = int(value)
-    except (TypeError, ValueError):
-        raise ConfigError(f"❌ {name} = '{value}' — должно быть целым числом")
-    if positive and n <= 0:
-        raise ConfigError(f"❌ {name} = {n} — должно быть положительным (> 0)")
-    return n
 
 
 def _fail(errors):
@@ -74,29 +54,47 @@ def _fail(errors):
 
 
 try:
-    VK_TOKEN       = _env("VK_TOKEN")
-    GROUP_ID_RAW   = _env("VK_GROUP_ID")
-    OWNER_ID_RAW   = _env("OWNER_ID")
-    COMMUNITY_LINK = _env("COMMUNITY_LINK", required=False, default="https://vk.com/")
-
+    # ---- VK_TOKEN (единственная ОБЯЗАТЕЛЬНАЯ переменная) ----
+    VK_TOKEN = os.getenv("VK_TOKEN", "").strip()
+    if not VK_TOKEN:
+        raise ConfigError(
+            "❌ Не задана переменная окружения VK_TOKEN\n"
+            "   BotHost → Environment → добавьте токен группы 242540253."
+        )
     if not re.match(r"^(vk1\.[a-z0-9]\.[A-Za-z0-9_\-\.]+|[0-9a-fA-F]{32,})$", VK_TOKEN):
         raise ConfigError(
             "❌ VK_TOKEN не похож на токен VK.\n"
-            "   Ожидается 'vk1.a.xxx…' или 32+ hex-символов.\n"
-            "   Получите токен: Управление → Работа с API → Ключи доступа."
+            "   Ожидается 'vk1.a.xxx…'. Получите: Управление группой → Работа с API → Ключи доступа."
         )
     if len(VK_TOKEN) < 30:
         raise ConfigError("❌ VK_TOKEN слишком короткий — скопируйте полностью.")
 
-    GROUP_ID = _parse_int("VK_GROUP_ID", GROUP_ID_RAW.lstrip("-"), positive=True)
-    OWNER_ID = _parse_int(
-        "OWNER_ID", OWNER_ID_RAW.lstrip("-").removeprefix("id"), positive=True
-    )
-    if OWNER_ID > 2_147_483_647:
-        raise ConfigError(f"❌ OWNER_ID = {OWNER_ID} вне диапазона VK.")
+    # ---- GROUP_ID (по умолчанию 242540253, можно переопределить) ----
+    GROUP_ID_RAW = os.getenv("VK_GROUP_ID", DEFAULT_GROUP_ID).strip() or DEFAULT_GROUP_ID
+    try:
+        GROUP_ID = int(GROUP_ID_RAW.lstrip("-"))
+        if GROUP_ID <= 0:
+            raise ValueError
+    except ValueError:
+        raise ConfigError(f"❌ VK_GROUP_ID = '{GROUP_ID_RAW}' — должно быть числом")
 
+    # ---- OWNER_ID (по умолчанию 1062211087) ----
+    OWNER_ID_RAW = (os.getenv("OWNER_ID", DEFAULT_OWNER_ID).strip()
+                    or DEFAULT_OWNER_ID)
+    try:
+        OWNER_ID = int(OWNER_ID_RAW.lstrip("-").removeprefix("id"))
+        if OWNER_ID <= 0:
+            raise ValueError
+    except ValueError:
+        raise ConfigError(f"❌ OWNER_ID = '{OWNER_ID_RAW}' — должно быть числом")
+
+    # ---- COMMUNITY_LINK (по умолчанию сообщество бота) ----
+    COMMUNITY_LINK = (
+        os.getenv("COMMUNITY_LINK", DEFAULT_COMMUNITY_LINK).strip()
+        or DEFAULT_COMMUNITY_LINK
+    )
     if not COMMUNITY_LINK.startswith(("https://", "http://")):
-        raise ConfigError(f"❌ COMMUNITY_LINK = '{COMMUNITY_LINK}' — нужна https://-ссылка.")
+        raise ConfigError(f"❌ COMMUNITY_LINK = '{COMMUNITY_LINK}' — нужна https://-ссылка")
 
 except ConfigError as e:
     _fail([str(e)])
@@ -105,42 +103,48 @@ except ConfigError as e:
 # ============================================================
 # VK СЕССИЯ
 # ============================================================
-vk_session = vk_api.VkApi(token=VK_TOKEN)
+vk_session = vk_api.VkApi(token=VK_TOKEN, api_version='5.199')
 vk = vk_session.get_api()
-longpoll = None  # создаём в main() после startup_check()
+longpoll = None
 
-# состояния пользователей: user_id -> {"state": ..., данные}
-user_states: dict = {}
+user_states = {}
 
 
 # ============================================================
 # ХЕЛПЕРЫ
 # ============================================================
-def price_for(interval: int) -> int:
-    """1 мин → 1000₽ ... 60 мин → 50₽ (линейно)."""
+def price_for(interval):
     interval = max(1, min(60, int(interval)))
     return round(1000 - (interval - 1) * (950 / 59))
 
 
-def send(peer_id: int, message: str, keyboard=None, attachment=None):
+def send(peer_id, message, keyboard=None, attachment=None):
     params = {
         "peer_id": peer_id,
         "message": message,
         "random_id": random.randint(1, 2**31 - 1),
-        "dont_parse_links": 0,
     }
     if keyboard is not None:
-        params["keyboard"] = keyboard.get_keyboard()
+        try:
+            params["keyboard"] = keyboard.get_keyboard()
+        except Exception as e:
+            log.error(f"keyboard.get_keyboard() failed: {e}")
+            return False
     if attachment:
         params["attachment"] = attachment
     try:
         vk.messages.send(**params)
+        log.info(f"✉️ sent to {peer_id} (kb={'yes' if keyboard else 'no'}, len={len(message)})")
+        return True
     except ApiError as e:
-        log.warning(f"send to {peer_id} failed: {e}")
+        log.error(f"❌ send to {peer_id} failed: code={e.code} msg={e}")
+        return False
+    except Exception as e:
+        log.exception(f"❌ send to {peer_id} unexpected: {e}")
+        return False
 
 
 def ack_event(event):
-    """Обязательный ответ на callback — иначе кнопка «крутится»."""
     try:
         vk.messages.sendMessageEventAnswer(
             event_id=event.object["event_id"],
@@ -151,7 +155,7 @@ def ack_event(event):
         log.warning(f"ack failed: {e}")
 
 
-def notify_staff(text: str):
+def notify_staff(text):
     targets = set()
     if OWNER_ID:
         targets.add(OWNER_ID)
@@ -198,7 +202,7 @@ def kb_piar_times():
 
 def kb_sub():
     k = VkKeyboard(inline=True)
-    k.add_openlink_button("📢 Подписаться", link=COMMUNITY_LINK)
+    k.add_openlink_button("📢 Подписаться на сообщество бота", link=COMMUNITY_LINK)
     k.add_callback_button(
         "✅ Я подписался",
         color=VkKeyboardColor.POSITIVE,
@@ -221,9 +225,9 @@ def cmd_start(peer_id, user_id, first_name=""):
         f"Команды:\n"
         f"• /пиар — создать пиар\n"
         f"• /моипиары — ваши пиары\n"
-        f"• /активныепиары — активные пиары\n"
+        f"• /активныепиары — активные\n"
         f"• /баланс — баланс\n"
-        f"• /подписка — бонус 100₽\n"
+        f"• /подписка — бонус 100₽ за подписку на сообщество\n"
         f"• /cancel — отмена",
         keyboard=kb_main(),
     )
@@ -231,35 +235,56 @@ def cmd_start(peer_id, user_id, first_name=""):
 
 def cmd_balance(peer_id, user_id):
     db.ensure_user(user_id)
-    send(peer_id, f"💰 Баланс: {db.get_balance(user_id)}₽")
+    send(peer_id, f"💰 Баланс: {db.get_balance(user_id)}₽", keyboard=kb_main())
 
 
 def cmd_sub(peer_id, user_id):
     db.ensure_user(user_id)
     r = db.fetchone("SELECT subscribed FROM users WHERE user_id=?", (user_id,))
     if r and r["subscribed"]:
-        send(peer_id, "✅ Вы уже получили бонус.")
+        send(peer_id, "✅ Вы уже получили бонус 100₽ за подписку.", keyboard=kb_main())
         return
-    send(peer_id, "🎁 Подпишитесь на сообщество и получите 100₽!", keyboard=kb_sub())
+    send(
+        peer_id,
+        "🎁 Подпишитесь на сообщество бота и получите 100₽!\n\n"
+        f"👉 {COMMUNITY_LINK}\n\n"
+        "После подписки нажмите «✅ Я подписался».",
+        keyboard=kb_sub(),
+    )
 
 
 def check_subscription(peer_id, user_id):
+    """
+    Проверяет подписку на СООБЩЕСТВО БОТА (GROUP_ID = 242540253).
+    При успехе начисляет 100₽ (один раз).
+    """
     try:
-        ok = vk.groups.isMember(group_id=GROUP_ID, user_id=user_id)
+        is_member = vk.groups.isMember(group_id=GROUP_ID, user_id=user_id)
     except Exception as e:
-        send(peer_id, f"Ошибка проверки подписки: {e}")
+        log.exception(f"isMember failed: {e}")
+        send(peer_id, f"❌ Ошибка проверки подписки: {e}")
         return
-    if not ok:
-        send(peer_id, "❌ Вы не подписаны на сообщество.")
+
+    if not is_member:
+        send(
+            peer_id,
+            "❌ Вы ещё не подписаны на сообщество бота.\n\n"
+            f"Подпишитесь: {COMMUNITY_LINK}\n"
+            "Затем нажмите «✅ Я подписался» ещё раз.",
+            keyboard=kb_sub(),
+        )
         return
+
     if db.set_subscribed(user_id):
         send(
             peer_id,
-            f"✅ Спасибо! Начислено 100₽\n"
-            f"💰 Баланс: {db.get_balance(user_id)}₽",
+            f"✅ Спасибо за подписку! Начислено 100₽.\n"
+            f"💰 Баланс: {db.get_balance(user_id)}₽\n\n"
+            f"Теперь можете создать пиар: /пиар",
+            keyboard=kb_main(),
         )
     else:
-        send(peer_id, "✅ Бонус уже получен.")
+        send(peer_id, "✅ Бонус уже был получен ранее.", keyboard=kb_main())
 
 
 def cmd_piar(peer_id, user_id):
@@ -278,27 +303,25 @@ def cmd_my_ads(peer_id, user_id):
     db.ensure_user(user_id)
     ads = db.fetchall("SELECT * FROM ads WHERE user_id=? ORDER BY id DESC", (user_id,))
     if not ads:
-        send(peer_id, "У вас пока нет пиаров. Введите /пиар")
+        send(peer_id, "У вас пока нет пиаров. Введите /пиар", keyboard=kb_main())
         return
     lines = ["📋 Ваши пиары:\n"]
     for a in ads:
         icon = "🟢" if a["status"] == "active" else "🔴"
         lines.append(f"{icon} #{a['id']} · {a['interval_min']}м · {a['price']}₽")
         lines.append(f"   {a['text'][:60]}")
-    send(peer_id, "\n".join(lines))
+    send(peer_id, "\n".join(lines), keyboard=kb_main())
 
 
 def cmd_active_ads(peer_id):
     ads = db.fetchall("SELECT * FROM ads WHERE status='active' ORDER BY id DESC")
     if not ads:
-        send(peer_id, "Нет активных пиаров.")
+        send(peer_id, "Нет активных пиаров.", keyboard=kb_main())
         return
     lines = ["🟢 Активные пиары:\n"]
     for a in ads:
-        lines.append(
-            f"#{a['id']} · id{a['user_id']} · {a['interval_min']}м · {a['price']}₽"
-        )
-    send(peer_id, "\n".join(lines))
+        lines.append(f"#{a['id']} · id{a['user_id']} · {a['interval_min']}м · {a['price']}₽")
+    send(peer_id, "\n".join(lines), keyboard=kb_main())
 
 
 def start_piar_payment(peer_id, user_id, interval):
@@ -328,9 +351,10 @@ def start_piar_payment(peer_id, user_id, interval):
         peer_id,
         f"💸 Недостаточно средств.\n\n"
         f"Заказ #{oid} · {interval} мин · {price}₽\n\n"
-        f"1️⃣ Оплатите {price}₽ владельцу\n"
+        f"1️⃣ Оплатите {price}₽ владельцу (id{OWNER_ID})\n"
         f"2️⃣ Владелец подтвердит: /piar_ok {oid}\n"
         f"3️⃣ Затем снова нажмите «📢 Пиар»",
+        keyboard=kb_main(),
     )
     notify_staff(
         f"🔔 Новый заказ #{oid}\n\n"
@@ -346,10 +370,14 @@ def handle_ad_text(peer_id, user_id, text):
     price = data.get("price")
     user_states.pop(user_id, None)
     if not interval:
-        send(peer_id, "Сессия истекла. Начните заново: /пиар")
+        send(peer_id, "Сессия истекла. Начните заново: /пиар", keyboard=kb_main())
         return
     ad_id = db.create_ad(user_id, text, interval, price)
-    send(peer_id, f"✅ Пиар #{ad_id} активирован\n⏱ {interval} мин · 💰 {price}₽")
+    send(
+        peer_id,
+        f"✅ Пиар #{ad_id} активирован\n⏱ {interval} мин · 💰 {price}₽",
+        keyboard=kb_main(),
+    )
 
 
 def cmd_piar_ok(peer_id, user_id, args):
@@ -371,6 +399,7 @@ def cmd_piar_ok(peer_id, user_id, args):
         f"Зачислено: {order['price']}₽\n"
         f"💰 Баланс: {db.get_balance(order['user_id'])}₽\n\n"
         f"Теперь нажмите «📢 Пиар»",
+        keyboard=kb_main(),
     )
 
 
@@ -379,7 +408,7 @@ def cmd_role(peer_id, user_id, args):
         send(peer_id, "❌ Нет прав.")
         return
     if len(args) != 2:
-        send(peer_id, "Использование: /role <id|@id> <deputy|admin|moderator>")
+        send(peer_id, "Использование: /role <id> <deputy|admin|moderator>")
         return
     target, role = args[0], args[1].lower()
     if role not in ("deputy", "admin", "moderator"):
@@ -423,11 +452,45 @@ def cmd_stats(peer_id):
         f"🟢 Активных пиаров: {s['active']}\n"
         f"🧾 Заказов: {s['orders']}\n"
         f"💰 Подтверждено: {s['funded']}₽",
+        keyboard=kb_main(),
     )
 
 
+def cmd_debug(peer_id, user_id):
+    if user_id != OWNER_ID:
+        return
+    ok = send(
+        peer_id,
+        "🔍 Тест клавиатуры. Если видишь 5 кнопок — всё ок.",
+        keyboard=kb_main(),
+    )
+    send(
+        peer_id,
+        f"✅ send={ok}\n"
+        f"api_version={vk_session.api_version}\n"
+        f"GROUP_ID={GROUP_ID}\n"
+        f"OWNER_ID={OWNER_ID}\n"
+        f"COMMUNITY_LINK={COMMUNITY_LINK}",
+    )
+
+
+def cmd_dump(peer_id, user_id):
+    if user_id != OWNER_ID:
+        return
+    try:
+        upload = vk_api.VkUpload(vk_session)
+        doc = upload.document_message(db.DB_PATH, peer_id=peer_id, title="piar_backup.db")
+        send(
+            peer_id,
+            f"📦 Бэкап БД за {datetime.now():%Y-%m-%d %H:%M}",
+            attachment=f"doc{doc['doc']['owner_id']}_{doc['doc']['id']}",
+        )
+    except Exception as e:
+        send(peer_id, f"❌ Ошибка бэкапа: {e}")
+
+
 # ============================================================
-# ДИСПЕТЧЕР ТЕКСТА
+# ДИСПЕТЧЕР
 # ============================================================
 BUTTON_MAP = {
     "📢 пиар":      "piar",
@@ -438,13 +501,17 @@ BUTTON_MAP = {
 }
 
 
+def _strip_emoji(s):
+    return "".join(c for c in s if c.isalnum() or c.isspace() or c in "/_").strip()
+
+
 def dispatch_text(peer_id, user_id, text, first_name=""):
     st = user_states.get(user_id, {})
 
     if st.get("state") == "waiting_ad_text":
         if text.lower() in ("/cancel", "отмена", "/отмена"):
             user_states.pop(user_id, None)
-            send(peer_id, "❌ Отменено.")
+            send(peer_id, "❌ Отменено.", keyboard=kb_main())
             return
         handle_ad_text(peer_id, user_id, text)
         return
@@ -462,6 +529,7 @@ def dispatch_text(peer_id, user_id, text, first_name=""):
         return
 
     low = text.strip().lower()
+    low_clean = _strip_emoji(low)
 
     if low in BUTTON_MAP:
         cmd = BUTTON_MAP[low]
@@ -473,7 +541,19 @@ def dispatch_text(peer_id, user_id, text, first_name=""):
         return
 
     if not low.startswith("/"):
-        send(peer_id, "Неизвестная команда. Список: /start")
+        if "мои" in low_clean and "пиар" in low_clean:
+            cmd_my_ads(peer_id, user_id); return
+        if "активн" in low_clean and "пиар" in low_clean:
+            cmd_active_ads(peer_id); return
+        if "пиар" in low_clean:
+            cmd_piar(peer_id, user_id); return
+        if "баланс" in low_clean:
+            cmd_balance(peer_id, user_id); return
+        if "подписк" in low_clean:
+            cmd_sub(peer_id, user_id); return
+
+    if not low.startswith("/"):
+        send(peer_id, "Неизвестная команда. Список: /start", keyboard=kb_main())
         return
 
     parts = low[1:].split()
@@ -487,13 +567,17 @@ def dispatch_text(peer_id, user_id, text, first_name=""):
     elif cmd in ("активныепиары", "active"):        cmd_active_ads(peer_id)
     elif cmd in ("баланс", "balance"):              cmd_balance(peer_id, user_id)
     elif cmd in ("подписка", "subscribe"):          cmd_sub(peer_id, user_id)
-    elif cmd in ("cancel", "отмена"):               user_states.pop(user_id, None); send(peer_id, "❌ Отменено.")
+    elif cmd in ("cancel", "отмена"):
+        user_states.pop(user_id, None)
+        send(peer_id, "❌ Отменено.", keyboard=kb_main())
     elif cmd == "piar_ok":                          cmd_piar_ok(peer_id, user_id, args)
     elif cmd == "role":                             cmd_role(peer_id, user_id, args)
     elif cmd in ("roles", "staff"):                 cmd_roles(peer_id)
     elif cmd in ("стата", "stats", "stat"):         cmd_stats(peer_id)
+    elif cmd == "debug":                            cmd_debug(peer_id, user_id)
+    elif cmd == "dump":                             cmd_dump(peer_id, user_id)
     else:
-        send(peer_id, "Неизвестная команда. Список: /start")
+        send(peer_id, "Неизвестная команда. Список: /start", keyboard=kb_main())
 
 
 # ============================================================
@@ -505,10 +589,11 @@ def handle_message(event):
     user_id = msg["from_id"]
     text = (msg.get("text") or "").strip()
 
+    log.info(f"📩 from={user_id} peer={peer_id} text={text[:40]!r}")
+
     if user_id <= 0:
         return
 
-    # групповые беседы: peer_id >= 2_000_000_000
     if peer_id >= 2_000_000_000:
         db.add_chat(peer_id, "")
 
@@ -526,10 +611,15 @@ def handle_message(event):
 
 def handle_callback(event):
     ack_event(event)
-    payload = json.loads(event.object.get("payload") or "{}")
+    try:
+        payload = json.loads(event.object.get("payload") or "{}")
+    except Exception:
+        payload = {}
     cmd = payload.get("cmd")
     user_id = event.object["user_id"]
     peer_id = event.object["peer_id"]
+
+    log.info(f"🔘 callback cmd={cmd} from={user_id}")
 
     if cmd == "piar_time":
         start_piar_payment(peer_id, user_id, payload["i"])
@@ -541,7 +631,7 @@ def handle_callback(event):
 
 
 # ============================================================
-# ФОНОВАЯ РАССЫЛКА
+# РАССЫЛКА
 # ============================================================
 def broadcast_loop():
     log.info("Broadcast loop started")
@@ -574,15 +664,17 @@ def broadcast_loop():
 
 
 # ============================================================
-# ПРОВЕРКА КОНФИГА ПЕРЕД ЗАПУСКОМ
+# СТАРТ
 # ============================================================
 def startup_check():
     errors = []
 
+    log.info(f"Версия API: {vk_session.api_version}")
+
     try:
         me = vk.groups.getById(group_id=GROUP_ID)
         if not me:
-            errors.append(f"❌ Группа {GROUP_ID} не найдена или нет доступа")
+            errors.append(f"❌ Группа {GROUP_ID} не найдена")
         else:
             log.info(f"✅ Токен валиден. Группа: «{me[0]['name']}» (id={GROUP_ID})")
     except ApiError as e:
@@ -599,7 +691,7 @@ def startup_check():
         if not (mask & 4):
             errors.append(
                 "❌ У токена нет права 'messages'.\n"
-                "   Пересоздайте токен и отметьте «Сообщения сообщества»."
+                "   Пересоздайте токен, отметьте «Сообщения сообщества»."
             )
         else:
             log.info("✅ Право 'messages' есть.")
@@ -618,10 +710,7 @@ def startup_check():
             name = f"{u.get('first_name','')} {u.get('last_name','')}".strip()
             log.info(f"✅ Владелец: {name} (id={OWNER_ID})")
             if u.get("can_write_private_message") == 0:
-                log.warning(
-                    f"⚠️ Владелец {OWNER_ID} запретил ЛС от сообществ — "
-                    f"уведомления не придут, пока он не разрешит."
-                )
+                log.warning(f"⚠️ Владелец {OWNER_ID} запретил ЛС от сообществ.")
     except ApiError as e:
         errors.append(f"❌ Проверка OWNER_ID: {e}")
 
@@ -631,16 +720,15 @@ def startup_check():
     log.info("✅ Все проверки пройдены. Запускаю LongPoll…")
 
 
-# ============================================================
-# MAIN
-# ============================================================
 def main():
     global longpoll
     log.info("=" * 50)
     log.info("VK PIAR BOT — запуск")
-    log.info(f"  GROUP_ID: {GROUP_ID}")
-    log.info(f"  OWNER_ID: {OWNER_ID}")
-    log.info(f"  TOKEN:    {VK_TOKEN[:8]}…{VK_TOKEN[-4:]} (len={len(VK_TOKEN)})")
+    log.info(f"  GROUP_ID:       {GROUP_ID}")
+    log.info(f"  OWNER_ID:       {OWNER_ID}")
+    log.info(f"  COMMUNITY_LINK: {COMMUNITY_LINK}")
+    log.info(f"  TOKEN:          {VK_TOKEN[:8]}…{VK_TOKEN[-4:]} (len={len(VK_TOKEN)})")
+    log.info(f"  DB_PATH:        {db.DB_PATH}")
     log.info("=" * 50)
 
     startup_check()
