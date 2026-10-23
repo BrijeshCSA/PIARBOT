@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-VK PIAR BOT.
+VK PIAR BOT (main.py).
 GROUP_ID и OWNER_ID прописаны жёстко (можно переопределить через env).
 /подписка проверяет подписку на СООБЩЕСТВО БОТА (GROUP_ID).
 """
@@ -29,7 +29,7 @@ log = logging.getLogger("piar-vk")
 
 
 # ============================================================
-# 🔴 ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ (жёстко)
+# ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ (жёстко)
 # ============================================================
 DEFAULT_GROUP_ID = "242540253"
 DEFAULT_OWNER_ID = "1062211087"
@@ -54,7 +54,6 @@ def _fail(errors):
 
 
 try:
-    # ---- VK_TOKEN (единственная ОБЯЗАТЕЛЬНАЯ переменная) ----
     VK_TOKEN = os.getenv("VK_TOKEN", "").strip()
     if not VK_TOKEN:
         raise ConfigError(
@@ -69,7 +68,6 @@ try:
     if len(VK_TOKEN) < 30:
         raise ConfigError("❌ VK_TOKEN слишком короткий — скопируйте полностью.")
 
-    # ---- GROUP_ID (по умолчанию 242540253, можно переопределить) ----
     GROUP_ID_RAW = os.getenv("VK_GROUP_ID", DEFAULT_GROUP_ID).strip() or DEFAULT_GROUP_ID
     try:
         GROUP_ID = int(GROUP_ID_RAW.lstrip("-"))
@@ -78,7 +76,6 @@ try:
     except ValueError:
         raise ConfigError(f"❌ VK_GROUP_ID = '{GROUP_ID_RAW}' — должно быть числом")
 
-    # ---- OWNER_ID (по умолчанию 1062211087) ----
     OWNER_ID_RAW = (os.getenv("OWNER_ID", DEFAULT_OWNER_ID).strip()
                     or DEFAULT_OWNER_ID)
     try:
@@ -88,7 +85,6 @@ try:
     except ValueError:
         raise ConfigError(f"❌ OWNER_ID = '{OWNER_ID_RAW}' — должно быть числом")
 
-    # ---- COMMUNITY_LINK (по умолчанию сообщество бота) ----
     COMMUNITY_LINK = (
         os.getenv("COMMUNITY_LINK", DEFAULT_COMMUNITY_LINK).strip()
         or DEFAULT_COMMUNITY_LINK
@@ -254,10 +250,6 @@ def cmd_sub(peer_id, user_id):
 
 
 def check_subscription(peer_id, user_id):
-    """
-    Проверяет подписку на СООБЩЕСТВО БОТА (GROUP_ID = 242540253).
-    При успехе начисляет 100₽ (один раз).
-    """
     try:
         is_member = vk.groups.isMember(group_id=GROUP_ID, user_id=user_id)
     except Exception as e:
@@ -723,7 +715,7 @@ def startup_check():
 def main():
     global longpoll
     log.info("=" * 50)
-    log.info("VK PIAR BOT — запуск")
+    log.info("VK PIAR BOT — запуск (main.py)")
     log.info(f"  GROUP_ID:       {GROUP_ID}")
     log.info(f"  OWNER_ID:       {OWNER_ID}")
     log.info(f"  COMMUNITY_LINK: {COMMUNITY_LINK}")
