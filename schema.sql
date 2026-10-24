@@ -1,4 +1,3 @@
--- Пользователи
 CREATE TABLE IF NOT EXISTS users (
     user_id     INTEGER PRIMARY KEY,
     username    TEXT,
@@ -10,14 +9,12 @@ CREATE TABLE IF NOT EXISTS users (
     last_seen   TEXT
 );
 
--- Чаты, где есть бот
 CREATE TABLE IF NOT EXISTS chats (
     chat_id   INTEGER PRIMARY KEY,
     title     TEXT,
     added_at  TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- Заказы на пополнение
 CREATE TABLE IF NOT EXISTS orders (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id      INTEGER NOT NULL,
@@ -30,7 +27,6 @@ CREATE TABLE IF NOT EXISTS orders (
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 
--- Пиары
 CREATE TABLE IF NOT EXISTS ads (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id      INTEGER NOT NULL,
@@ -44,7 +40,6 @@ CREATE TABLE IF NOT EXISTS ads (
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 
--- Роли
 CREATE TABLE IF NOT EXISTS roles (
     user_id    INTEGER NOT NULL,
     role       TEXT NOT NULL,
@@ -53,7 +48,6 @@ CREATE TABLE IF NOT EXISTS roles (
     PRIMARY KEY (user_id, role)
 );
 
--- Индексы
 CREATE INDEX IF NOT EXISTS idx_ads_status    ON ads(status);
 CREATE INDEX IF NOT EXISTS idx_ads_user      ON ads(user_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
