@@ -16,8 +16,8 @@ try:
     print(f"✅ Группа: {g[0]['name']} (id={GROUP_ID})")
     u = vk.users.get(user_ids=OWNER)
     print(f"✅ Владелец: {u[0]['first_name']} {u[0]['last_name']} (id={OWNER})")
-    p = vk.groups.getTokenPermissions()
-    print(f"✅ Права токена: mask={p.get('mask')}")
     print("\n🎉 Всё в порядке — запускайте main.py")
 except ApiError as e:
     print(f"❌ VK API: {e} (code={e.code})"); sys.exit(1)
+except Exception as e:
+    print(f"❌ Сеть: {type(e).__name__}: {e}"); sys.exit(1)
