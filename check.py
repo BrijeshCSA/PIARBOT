@@ -13,7 +13,15 @@ if not TOKEN:
 try:
     vk = vk_api.VkApi(token=TOKEN, api_version='5.199').get_api()
     g = vk.groups.getById(group_id=GROUP_ID)
-    print(f"✅ Группа: {g[0]['name']} (id={GROUP_ID})")
+    
+    # Исправление KeyError: 0
+    if isinstance(g, dict):
+        groups = g.get('groups', [])
+        name = groups[0]['name'] if groups else "Неизвестно"
+    else:
+        name = g[0]['name'] if g else "Неизвестно"
+
+    print(f"✅ Группа: {name} (id={GROUP_ID})")
     u = vk.users.get(user_ids=OWNER)
     print(f"✅ Владелец: {u[0]['first_name']} {u[0]['last_name']} (id={OWNER})")
     print("\n🎉 Всё в порядке — запускайте main.py")
