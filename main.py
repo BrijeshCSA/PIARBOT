@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 VK PIAR BOT (main.py).
-GROUP_ID и OWNER_ID прописаны жёстко.
+Токен вшит в код. GROUP_ID и OWNER_ID прописаны жёстко.
 /подписка проверяет подписку на СООБЩЕСТВО БОТА.
 """
 import os
@@ -29,45 +29,12 @@ logging.basicConfig(
 log = logging.getLogger("piar-vk")
 
 # ============================================================
-# ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ (жёстко)
+# НАСТРОЙКИ (ВШИТЫ В КОД)
 # ============================================================
-DEFAULT_GROUP_ID = "242540253"
-DEFAULT_OWNER_ID = "1062211087"
-DEFAULT_COMMUNITY_LINK = "https://vk.com/club242540253"
-
-class ConfigError(Exception):
-    pass
-
-def _fail(errors):
-    print("=" * 60, file=sys.stderr)
-    print("ПРОВЕРКА КОНФИГА НЕ ПРОЙДЕНА", file=sys.stderr)
-    print("=" * 60, file=sys.stderr)
-    for e in errors:
-        print(e, file=sys.stderr)
-    print("=" * 60, file=sys.stderr)
-    sys.exit(1)
-
-try:
-    VK_TOKEN = os.getenv("VK_TOKEN", "").strip()
-    if not VK_TOKEN:
-        raise ConfigError(
-            "❌ Не задана переменная окружения VK_TOKEN\n"
-            "   BotHost → Environment → добавьте токен группы 242540253."
-        )
-    if not re.match(r"^(vk1\.[a-z0-9]\.[A-Za-z0-9_\-\.]+|[0-9a-fA-F]{32,})$", VK_TOKEN):
-        raise ConfigError("❌ VK_TOKEN не похож на токен VK. Ожидается 'vk1.a.xxx…'.")
-    if len(VK_TOKEN) < 30:
-        raise ConfigError("❌ VK_TOKEN слишком короткий.")
-
-    GROUP_ID_RAW = os.getenv("VK_GROUP_ID", DEFAULT_GROUP_ID).strip() or DEFAULT_GROUP_ID
-    GROUP_ID = int(GROUP_ID_RAW.lstrip("-"))
-
-    OWNER_ID_RAW = os.getenv("OWNER_ID", DEFAULT_OWNER_ID).strip() or DEFAULT_OWNER_ID
-    OWNER_ID = int(OWNER_ID_RAW.lstrip("-").removeprefix("id"))
-
-    COMMUNITY_LINK = os.getenv("COMMUNITY_LINK", DEFAULT_COMMUNITY_LINK).strip() or DEFAULT_COMMUNITY_LINK
-except ConfigError as e:
-    _fail([str(e)])
+VK_TOKEN = "vk1.a.lmYYNYMrGAoehuddjPZlYEKCIXAjBxWmLNhdUlOh-zECfFMY3ey8ZFHbt_iOpInm6xCFfmQA5yp5d4LxaycP4sZUPrxvksd3tGLNJWFTKxM33H7iULAGFlf_DlX-dFRf5rdPVm6xSNh2iM4OzEFAFQ4FfhZLSjJpA1VK1bxQKIpvlT0tYUTEhnWA0T7l-3GQ1XSA11cHdj5Rn7wNtFQosA"
+GROUP_ID = 242540253
+OWNER_ID = 1062211087
+COMMUNITY_LINK = "https://vk.com/club242540253"
 
 # ============================================================
 # VK СЕССИЯ
@@ -394,10 +361,11 @@ def dispatch_text(peer_id, user_id, text, first_name=""):
         if "подписк" in low_clean: cmd_sub(peer_id, user_id); return
 
     if not low.startswith("/"):
-        send(peer_id, "Неизвестная команда. /start", keyboard=kb_main())
-        return
+        return # Игнорируем текст без команды
 
     parts = low[1:].split()
+    if not parts:
+        return
     cmd, args = parts[0], parts[1:]
 
     if cmd in ("start", "начать", "меню"): cmd_start(peer_id, user_id, first_name)
@@ -414,7 +382,7 @@ def dispatch_text(peer_id, user_id, text, first_name=""):
     elif cmd in ("roles", "staff"): cmd_roles(peer_id)
     elif cmd in ("стата", "stats", "stat"): cmd_stats(peer_id)
     elif cmd == "debug": cmd_debug(peer_id, user_id)
-    else: send(peer_id, "Неизвестная команда. /start", keyboard=kb_main())
+    # Неизвестные команды игнорируются (бот промолчит)
 
 # ============================================================
 # СОБЫТИЯ
@@ -425,15 +393,24 @@ def handle_message(event):
     user_id = msg["from_id"]
     text = (msg.get("text") or "").strip()
 
-    if user_id <= 0: return
-    if peer_id >= 2_000_000_000: db.add_chat(peer_id, "")
+    if user_id <= 0: 
+        return
+
+    # ЗАЩИТА ОТ БЕСЕД:
+    # Если сообщение пришло из беседы, мы сохраняем её для рассылки,
+    # НО НЕ выполняем команды и НЕ отправляем клавиатуру.
+    if peer_id >= 2_000_000_000:
+        db.add_chat(peer_id, "")
+        return
 
     first = ""
     if text.lower().startswith(("/start", "/начать")):
         try:
             users = vk.users.get(user_ids=user_id)
-            if users: first = users[0].get("first_name", "")
-        except Exception: pass
+            if users: 
+                first = users[0].get("first_name", "")
+        except Exception: 
+            pass
 
     dispatch_text(peer_id, user_id, text, first)
 
@@ -476,41 +453,42 @@ def broadcast_loop():
 # СТАРТ
 # ============================================================
 def startup_check():
-    errors = []
     log.info(f"Версия API: {vk_session.api_version}")
-
     try:
-        # Исправление KeyError: 0 (API 5.199 возвращает словарь)
         me = vk.groups.getById(group_id=GROUP_ID)
         if isinstance(me, dict):
             groups = me.get('groups', [])
             group_name = groups[0]['name'] if groups else "Неизвестно"
         else:
             group_name = me[0]['name'] if me else "Неизвестно"
-            
         log.info(f"✅ Токен валиден. Группа: «{group_name}» (id={GROUP_ID})")
     except Exception as e:
-        errors.append(f"❌ Сеть/VK: {type(e).__name__}: {e}\n{traceback.format_exc()}")
-
-    if errors: _fail(errors)
+        log.error(f"❌ Сеть/VK: {type(e).__name__}: {e}")
+        sys.exit(1)
 
     try:
         perms = vk.groups.getTokenPermissions()
         mask = perms.get("mask", 0)
-        if not (mask & 4): errors.append("❌ У токена нет права 'messages'. Пересоздайте токен.")
-        else: log.info("✅ Право 'messages' есть.")
-    except Exception: pass
+        if not (mask & 4): 
+            log.error("❌ У токена нет права 'messages'. Пересоздайте токен.")
+            sys.exit(1)
+        log.info("✅ Право 'messages' есть.")
+    except Exception: 
+        pass
 
     try:
         users = vk.users.get(user_ids=OWNER_ID, fields="can_write_private_message")
-        if not users: errors.append(f"❌ Владелец {OWNER_ID} не найден")
-        else:
-            u = users[0]
-            log.info(f"✅ Владелец: {u.get('first_name','')} (id={OWNER_ID})")
-            if u.get("can_write_private_message") == 0: log.warning(f"⚠️ Владелец запретил ЛС.")
-    except Exception as e: errors.append(f"❌ Проверка OWNER_ID: {e}")
+        if not users: 
+            log.error(f"❌ Владелец {OWNER_ID} не найден")
+            sys.exit(1)
+        u = users[0]
+        log.info(f"✅ Владелец: {u.get('first_name','')} (id={OWNER_ID})")
+        if u.get("can_write_private_message") == 0: 
+            log.warning(f"⚠️ Владелец запретил ЛС.")
+    except Exception as e: 
+        log.error(f"❌ Проверка OWNER_ID: {e}")
+        sys.exit(1)
 
-    if errors: _fail(errors)
     log.info("✅ Все проверки пройдены. Запускаю LongPoll…")
 
 def main():
