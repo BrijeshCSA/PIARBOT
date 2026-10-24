@@ -480,8 +480,15 @@ def startup_check():
     log.info(f"Версия API: {vk_session.api_version}")
 
     try:
+        # Исправление KeyError: 0 (API 5.199 возвращает словарь)
         me = vk.groups.getById(group_id=GROUP_ID)
-        log.info(f"✅ Токен валиден. Группа: «{me[0]['name']}» (id={GROUP_ID})")
+        if isinstance(me, dict):
+            groups = me.get('groups', [])
+            group_name = groups[0]['name'] if groups else "Неизвестно"
+        else:
+            group_name = me[0]['name'] if me else "Неизвестно"
+            
+        log.info(f"✅ Токен валиден. Группа: «{group_name}» (id={GROUP_ID})")
     except Exception as e:
         errors.append(f"❌ Сеть/VK: {type(e).__name__}: {e}\n{traceback.format_exc()}")
 
